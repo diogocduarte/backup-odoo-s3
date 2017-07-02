@@ -1,0 +1,27 @@
+# Backup Odoo Server to S3
+
+## Requirements:
+
+- sudo apt-install awscli p7zip-full
+
+## Install:
+
+- git clone <repo-url>
+- vim ~/.bkodoorc (add the following vars)
+   
+>    SERVER_NAME='odoogap-www-server'
+>    DB_NAME='database1'
+>    DATA_FOLDER='/opt/odoo/data'
+
+## Usage:
+
+> ./back
+
+## Crontab:
+
+crontab -e (add the following)
+0 10 * * * /home/ogap/.backup/back >/dev/null 2>&1
+
+## Author:
+
+Diogo Duarte <dduarte@odoogap.com>

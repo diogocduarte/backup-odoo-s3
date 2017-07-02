@@ -1,0 +1,83 @@
+#!/bin/bash
+
+# Backup Odoo Server to S3
+#
+# Requirements:
+# - sudo apt-install awscli p7zip-full
+#
+# Install:
+# - git clone <repo-url>
+# - vim ~/.bkodoorc (add the following vars)
+#   
+#    SERVER_NAME='odoogap-www-server'
+#    DB_NAME='database1'
+#    DATA_FOLDER='/opt/odoo/data'
+#
+# Usage:
+# > ./back
+#
+# Crontab:
+# crontab -e (add the following)
+# 0 10 * * * /home/ogap/.backup/back >/dev/null 2>&1
+#
+# Author:
+# Diogo Duarte <dduarte@odoogap.com>
+
+if [ -e server.conf ]; then
+	echo "Reading local config server.conf" >&2
+    source server.conf
+else
+   
+if [ -e ~/.bkodoorc ]; then
+	echo "Reading user config ~/.bkodoorc" >&2
+    source ~/.bkodoorc
+fi
+
+
+now=`date +"%m_%d_%Y"`
+FOLDER_BACK="backup_${SERVER_NAME}_${now}"
+
+function err() {
+	echo "$0: $*" >&2
+	exit 1
+}
+
+function checkdependencies() {
+	P7ZIP=$(which 7z)
+	[ "$P7ZIP" ] || err "p7zip-full not found, please install p7zip-full"
+	AWS=$(which aws)
+	[ "$AWS" ] || err "aws cli not found, please install awscli"
+}
+
+function checkinput() {
+	[ "$SERVER_NAME" ]    || err "SERVER_NAME not specified"
+	[ "$DB_NAME" ]    || err "DB_NAME not specified"
+	[ "$DATA_FOLDER" ]    || err "DATA_FOLDER not specified"
+}
+
+function slack(){
+	# Param 1 is the message
+	arg1=$1
+	curl -X POST --data-urlencode "payload={\
+                        'channel': '#aws', \
+                        'username': 'monit', \
+                        'text': '${arg1}', \
+                        'icon_emoji': ':gear:'}" \
+ 			${SLACK_HOOK} 
+}
+
+checkdependencies
+checkinput
+
+mkdir -p ${FOLDER_BACK}
+sudo -u postgres pg_dump -Fc ${DB_NAME} -f /tmp/${DB_NAME}.dump
+
+sudo mv /tmp/${DB_NAME}.dump ${FOLDER_BACK}
+sudo cp -rf ${DATA_FOLDER} ${FOLDER_BACK}
+sudo chown -R $USER:$USER ${FOLDER_BACK}
+
+7z a ${FOLDER_BACK}.7z ${FOLDER_BACK}
+rm -rf ${FOLDER_BACK}
+aws s3 mv ${FOLDER_BACK}.7z ${S3_URL}${FOLDER_BACK}.7z
+
+slack "${SERVER_NAME} successfuly backup to https://console.aws.amazon.com/${S3_URL/:\//\/object}"
