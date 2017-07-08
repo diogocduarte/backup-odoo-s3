@@ -15,6 +15,10 @@
 >    DB_NAME='database1'
 >    DATA_FOLDER='/opt/odoo/data'
 
+```bash
+wget -O - https://raw.githubusercontent.com/diogocduarte/backup-odoo-s3/master/install.sh | bash
+```
+
 ## Troubleshooting
 
 aws (awscli) link might not work.
