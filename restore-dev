@@ -35,11 +35,24 @@ if [ -e ~/.bkodoorc ]; then
 fi
 
 
-now=`date +"%Y_%d_%m_%H%M"`
+now=`date +"%m_%d_%Y"`
 FOLDER_BACK="backup_${SERVER_NAME}_${now}"
 
 function err() {
 	echo "$0: $*" >&2
+	exit 1
+}
+
+die_help() {
+	if [ "$*" ]; then
+		echo "$*" >&2
+		echo "" >&2
+	fi
+   echo "restore-dev command
+
+   restore-dev ls {s3-folder}
+
+" >&2
 	exit 1
 }
 
@@ -52,35 +65,48 @@ function checkdependencies() {
 
 function checkinput() {
 	[ "$SERVER_NAME" ]    || err "SERVER_NAME not specified"
-	[ "$DB_NAME" ]    || err "DB_NAME not specified"
 	[ "$DATA_FOLDER" ]    || err "DATA_FOLDER not specified"
 }
 
-function slack(){
-	# Param 1 is the message
-	arg1=$1
-	curl -X POST --data-urlencode "payload={\
-                        'channel': '#aws', \
-                        'username': 'monit', \
-                        'text': '${arg1}', \
-                        'icon_emoji': ':gear:'}" \
- 			${SLACK_HOOK} 
-}
+while getopts ":h" opt; do
+  case ${opt} in
+    h )
+      		die_help
+      ;;
+    \? )
+		    echo "Invalid Option: -$OPTARG" 1>&2
+		    exit 1
+      ;;
+  esac
+done
+shift $((OPTIND -1))
+
+subcommand=$1; shift  
+case "$subcommand" in
+  # Parse options to the install sub command
+  ls)
+    s3-folder=$1; shift  # Remove 'install' from the argument list
+
+    # Process package options
+    while getopts ":t:" s3-folder; do
+      case ${s3-folder} in
+        : )
+          echo "Invalid Option: -$OPTARG requires an argument" 1>&2
+          exit 1
+          ;;
+      esac
+    done
+    shift $((OPTIND -1))
+    ;;
+esac
+
+echo "Subcommand $subcommand"
 
 checkdependencies
 checkinput
 
-mkdir -p ${FOLDER_BACK}
-# These might need sudo if user has no pg access
-pg_dump -Fc ${DB_NAME} -f /tmp/${DB_NAME}.dump
-mv /tmp/${DB_NAME}.dump ${FOLDER_BACK}
-cp -rf ${DATA_FOLDER} ${FOLDER_BACK}
-# sudo chown -R $USER:$USER ${FOLDER_BACK}
+aws s3 ls
 
-7z a ${FOLDER_BACK}.7z ${FOLDER_BACK}
-rm -rf ${FOLDER_BACK}
-aws s3 mv ${FOLDER_BACK}.7z ${S3_URL}${FOLDER_BACK}.7z
-s3_link=${S3_URL/:\//\/object}
-slack "${SERVER_NAME} successfuly backup to https://console.aws.amazon.com/${s3_link}"
+
 
 exit $?
