@@ -11,12 +11,13 @@
 - git clone <repo-url>
 - vim ~/.bkodoorc (add the following vars)
    
-> SERVER_NAME='odoogap-www-server'
-> DB_NAME='database1'
-> DATA_FOLDER='/opt/odoo/data'
-> S3_URL="s3://production-odoo/backups/"
-> SLACK_HOOK="https://hooks.slack.com/services/SED....."
-
+```bash
+SERVER_NAME='odoogap-www-server'
+DB_NAME='database1'
+DATA_FOLDER='/opt/odoo/data'
+S3_URL="s3://production-odoo/backups/"
+SLACK_HOOK="https://hooks.slack.com/services/SED....."
+```
 
 ```bash
 wget -O - https://raw.githubusercontent.com/diogocduarte/backup-odoo-s3/master/install.sh | bash
