@@ -20,7 +20,7 @@ SLACK_HOOK="https://hooks.slack.com/services/SED....."
 ```
 
 ```bash
-wget -O - https://raw.githubusercontent.com/diogocduarte/backup-odoo-s3/master/install.sh | bash
+wget -O - https://raw.githubusercontent.com/diogocduarte/backup-odoo-s3/master/install.sh && bash install.sh && rm install.sh
 ```
 
 ## Troubleshooting

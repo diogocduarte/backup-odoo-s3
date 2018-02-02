@@ -46,7 +46,7 @@ echo
 
 read -n1 -r -p 'Confirm and press any key to proceed (or Ctrl-C to halt) ...' key
 
-if [ ! -f `~/.bkodoorc`]; then
+if [ ! -f ~/.bkodoorc ]; then
     touch ~/.bkodoorc 
     echo "SERVER_NAME='$INSTANCENAME'" >> ~/.bkodoorc
     echo "DB_NAME='$DATABASENAME'" >> ~/.bkodoorc
@@ -55,12 +55,12 @@ if [ ! -f `~/.bkodoorc`]; then
     echo "SLACK_HOOK='$SLACKHOOK'" >> ~/.bkodoorc
 fi
 
-if [ ! -f `~/.profile`]; then
+if [ ! -f ~/.profile ]; then
     touch ~/.profile
     echo "export PATH=~/.local/bin:$$PATH" >> ~/.profile
 fi
 
-if [ ! -d `~/.backup/back`]; then
+if [ ! -d ~/.backup/back ]; then
     git clone https://github.com/diogocduarte/backup-odoo-s3.git ~/.backup
     chmod +x ~/.backup/back
 fi
