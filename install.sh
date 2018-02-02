@@ -33,7 +33,7 @@ SLACKHOOK="${SLACKHOOK:-$SLACKHOOK_DEFAULT}"
 echo "Please check you have runned the following requirements"
 echo
 echo "## Requirements:"
-echo "- sudo apt-install p7zip-full"
+echo "- sudo apt install p7zip-full"
 echo "- pip install awscli --upgrade --user"
 echo
 echo
@@ -57,7 +57,7 @@ fi
 
 if [ ! -f ~/.profile ]; then
     touch ~/.profile
-    echo "export PATH=~/.local/bin:$$PATH" >> ~/.profile
+    echo "export PATH=~/.local/bin:$PATH" >> ~/.profile
 fi
 
 if [ ! -d ~/.backup/back ]; then
@@ -65,14 +65,16 @@ if [ ! -d ~/.backup/back ]; then
     chmod +x ~/.backup/back
 fi
 
+# You might need to add this line
+croncmd="PATH=$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin"
+( crontab -l | grep -v -F "$croncmd" ; echo "$croncmd" ) | crontab -
+
 # Add to CRONTAB
 croncmd="$HOME/.backup/back >/dev/null 2>&1"
 cronjob="0 20 * * * $croncmd"
 ( crontab -l | grep -v -F "$croncmd" ; echo "$cronjob" ) | crontab -
 
-# You might need to add this line
-croncmd="PATH=$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/$"
-( crontab -l | grep -v -F "$croncmd" ; echo "$croncmd" ) | crontab -
+
 
 
 

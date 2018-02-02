@@ -2,7 +2,7 @@
 
 ## Requirements:
 
-- sudo apt-install awscli p7zip-full
+- sudo apt install awscli p7zip-full
 - pip install awscli --upgrade --user
 
 ## Install:
