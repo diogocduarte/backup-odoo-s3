@@ -25,62 +25,210 @@
 # Author:
 # Diogo Duarte <dduarte@odoogap.com>
 
-if [ -e server.conf ]; then
-	echo "Reading local config server.conf" >&2
-    source server.conf
-fi
-if [ -e ~/.bkodoorc ]; then
-	echo "Reading user config ~/.bkodoorc" >&2
-    source ~/.bkodoorc
-fi
+
+p7zip_cmd=
+aws_cmd=
+bc_cmd=
+backup_folder=
+backup_root_folder="~/backups/automatic-dumps/"
+backup_root_folder="/tmp/automatic-dumps/"
+last_error=
 
 
-now=`date +"%Y_%d_%m_%H%M"`
-FOLDER_BACK="backup_${SERVER_NAME}_${now}"
+s3_link=
 
-function err() {
-	echo "$0: $*" >&2
-	exit 1
+
+# -------------------------------------------------------------------------
+function info(){
+   echo "$1"
 }
 
-function checkdependencies() {
-	P7ZIP=$(which 7z)
-	[ "$P7ZIP" ] || err "p7zip-full not found, please install p7zip-full"
-	AWS=$(which aws)
-	[ "$AWS" ] || err "aws cli not found, please install awscli"
+
+# -------------------------------------------------------------------------
+function error() {
+   last_error="$1"
+   echo "$1" >&2
 }
 
-function checkinput() {
-	[ "$SERVER_NAME" ]    || err "SERVER_NAME not specified"
-	[ "$DB_NAME" ]    || err "DB_NAME not specified"
-	[ "$DATA_FOLDER" ]    || err "DATA_FOLDER not specified"
+
+
+# -------------------------------------------------------------------------
+function cleanup(){
+   info "cleaning up..."
+   # rm -rf $backup_root_folder/* 
 }
 
+
+# -------------------------------------------------------------------------
+function on_exit(){
+   local rc=$?
+   cleanup
+
+   if [ $rc -ne 0 ]; then
+      echo "Got error message. Going to send slack notification..."
+      # slack odoo "$SERVER_NAME failed during backup with exit code $rc. Check log file (if any). Last message was: $last_error"
+   fi
+}
+
+
+
+# -------------------------------------------------------------------------
+function init(){
+   info "init script..."
+   if [ -e server.conf ]; then
+      echo "Reading default config server.conf"
+      source server.conf
+   fi
+   if [ -e ~/.bkodoorc ]; then
+      echo "Reading user config ~/.bkodoorc"
+      source ~/.bkodoorc
+   fi
+
+
+   local rc=0
+   if [ -z "$SERVER_NAME" ]; then
+      error "SERVER_NAME not specified"
+      rc=1
+   fi
+   
+   if [ -z "$DB_NAME" ]; then 
+      error "DB_NAME not specified"
+      rc=2
+   fi
+
+   if [ -z "$DATA_FOLDER" ]; then
+      error "DATA_FOLDER not specified"
+      rc=3
+   fi
+
+   s3_link=${S3_URL/:\//\/object}
+   if [ -z "$S3_URL" ] || [ -z "$s3_link" ]; then
+      error "S3_URL is empty or it is not posssible to extract object..."
+      rc=4
+   fi
+
+   if [ $rc -eq 0 ]; then
+      now=$(date +"%Y_%d_%m_%H%M")
+      backup_folder="backup_${SERVER_NAME}_$now"
+      mkdir -p "$backup_root_folder/$backup_folder"
+      info "Current backup folder: $backup_root_folder/$backup_folder"
+   fi
+
+   return $rc
+}
+
+
+
+# -------------------------------------------------------------------------
+function check_dependencies() {
+   info "checking dependencies..."
+   local rc=0
+   p7zip_cmd=$(which 7z)
+   if [ -z "$p7zip_cmd" ]; then
+      error "p7zip-full not found, please install p7zip-full"
+      rc=10
+   fi
+
+   aws_cmd=$(which aws)
+   if [ -z "$aws_cmd" ]; then
+      error "aws cli not found, please install awscli"
+      rc=11
+   fi
+
+   bc_cmd=$(which bc)
+   if [ -z "$bc_cmd" ]; then
+      error "bc not found, please install it"
+      rc=12
+   fi
+
+   return $rc
+}
+
+
+
+# -------------------------------------------------------------------------
+function do_backup(){
+   info "running backup procedure..."
+   local rc=0
+
+
+   local last_backup=$($aws_cmd s3 ls ${S3_URL} | tail -1)
+   rc=$?
+   if [ $rc -ne 0 ]; then
+      error "Failed get last backup size..."
+      return 1
+   fi
+
+
+   pg_dump -Fc ${DB_NAME} -f $backup_root_folder/$backup_folder/${DB_NAME}.dump && \
+      cp -rf $DATA_FOLDER/* $backup_root_folder/$backup_folder && \
+      info "archiving dump...." && \
+      $p7zip_cmd a $backup_root_folder/${backup_folder}.7z $backup_root_folder/$backup_folder >/dev/null
+
+   rc=$?
+   if [ $rc -ne 0 ]; then
+      error "Failed during backup creation..."
+      return 2
+   fi
+
+   local current_backup_size=$(ls -l  $backup_root_folder/${backup_folder}.7z | awk '{print $5}')
+   local last_backup_size=$(echo $last_backup | awk '{print $3}')
+
+
+   echo "last=$last_backup_size, current=$current_backup_size"
+
+   # current backup size should not be less then 95% of the last one
+   if [ ! -z "$last_backup_size" ] && [ $current_backup_size -gt $(echo "scale=0; $last_backup_size*95/100" | $bc_cmd) ]; then
+      $aws_cmd s3 mv $backup_root_folder/${backup_folder}.7z ${S3_URL}${backup_folder}.7z
+   else
+      error "last backup size=$last_backup_size, current_backup_size=$current_backup_size. Seems that current less than 95% percent of the previous one"
+      return 3
+   fi
+
+   return 0
+}
+
+
+
+
+# -------------------------------------------------------------------------
+function check_backups(){
+   info "checking backups..."
+}
+
+
+# -------------------------------------------------------------------------
 function slack(){
-	# Param 1 is the message
-	arg1=$1
-	curl -X POST --data-urlencode "payload={\
-                        'channel': '#${arg1}', \
+   curl -X POST --data-urlencode "payload={\
+                        'channel': '#$1', \
                         'username': 'monit', \
-                        'text': '${arg2}', \
+                        'text': '$2', \
                         'icon_emoji': ':gear:'}" \
- 			${SLACK_HOOK} 
+         ${SLACK_HOOK} 
 }
 
-checkdependencies
-checkinput
 
-mkdir -p ${FOLDER_BACK}
-# These might need sudo if user has no pg access
-pg_dump -Fc ${DB_NAME} -f /tmp/${DB_NAME}.dump
-mv /tmp/${DB_NAME}.dump ${FOLDER_BACK}
-cp -rf ${DATA_FOLDER} ${FOLDER_BACK}
-# sudo chown -R $USER:$USER ${FOLDER_BACK}
+# ---------------  MAIN   ---------------------------------------------------
+trap on_exit EXIT SIGINT SIGTERM SIGQUIT
 
-7z a ${FOLDER_BACK}.7z ${FOLDER_BACK}
-rm -rf ${FOLDER_BACK}
-aws s3 mv ${FOLDER_BACK}.7z ${S3_URL}${FOLDER_BACK}.7z
-s3_link=${S3_URL/:\//\/object}
-slack odoo "${SERVER_NAME} successfuly backup to https://console.aws.amazon.com/${s3_link}"
 
-exit $?
+check_dependencies || exit $?
+init || exit $?
+
+
+do_backup || exit $?
+
+check_backups
+
+# This script needs improvements but basically takes the AWS credentials on the user folder and uses 7zip to create a file with the Postgres dump plus the Odoo filestore
+
+# Sometimes credentials point to a bucket that is ours other times credentials belong to customer. When we start the project we backup with our own credentials to make sure the project is safe until we deliver to customer.
+
+# We need a routine that can be called from the command line, that will loop through all active projects in inventory and will check for the existence of a backup script on all production instances and will gather information regarding all backups:
+
+# date of the last backup
+# size of the last backup
+# date of the older backup
+# are the backups growing?
+
+# This information will be posted into a slack channel
