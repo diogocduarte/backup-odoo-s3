@@ -20,7 +20,8 @@
 #
 # Crontab:
 # crontab -e (add the following)
-# 0 10 * * * /home/ogap/.backup/back >/dev/null 2>&1
+# 0 10 * * * /home/ogap/.backup/back --backup >/dev/null 2>&1
+# 0 10 * * * /home/ogap/.backup/back --report >/dev/null 2>&1
 #
 # Author:
 # Diogo Duarte <dduarte@odoogap.com>
@@ -35,19 +36,152 @@ backup_root_folder="/tmp/automatic-dumps/"
 last_error=
 
 
-s3_link=
+backup_mode=
+report_mode=
+silent=0
+
+
+# consts
+C_MAKE_ME_SILENT=1
+C_LAST_BACKUPS_CNT_TO_COMPARE_DEFAULT=3
+
+
+# color palette
+C_RED='\033[0;31m'
+C_GREEN='\033[0;32m'
+C_YELLOW='\033[1;33m'
+C_PURPLE='\033[0;35m'
+C_NC='\033[0m'
+
+
+# -------------------------------------------------------------------------
+function report_s3_backups(){
+   backups="$(aws s3 ls --human-readable $S3_URL)"
+   if [ $? -ne 0 ]; then
+      error "Cannot get list of backups, bucket path '$S3_URL'" 3
+      return 1
+   fi
+
+   local last_backups_cnt_to_compare=$LAST_BACKUPS_CNT_TO_COMPARE
+   if [ -z "$last_backups_cnt_to_compare" ]; then
+      last_backups_cnt_to_compare=$C_LAST_BACKUPS_CNT_TO_COMPARE_DEFAULT
+      warning "Option 'LAST_BACKUPS_CNT_TO_COMPARE' was not set. Going to use default value: $C_LAST_BACKUPS_CNT_TO_COMPARE_DEFAULT" 1 
+   fi
+
+   earliest_backup=$(echo "$backups" | tail -1 | awk '{print $1}')
+   earliest_backup_size=$(echo "$backups" | tail -1 | awk '{print $3,$4}')
+   oldest_backup=$(echo "$backups" | head -1 | awk '{print $1}')
+
+   debug "backup info: oldest=$oldest_backup, earliest=$earliest_backup, earliest size=$earliest_backup_size" 1
+
+   # are the backups size growing? last three backups checks
+   #
+   # sort by date and by size should retain the order
+   #
+   data="$(aws s3 ls $S3_URL | awk '{print $1,$2,$3}' | sed 's/ /_/' | tail -$last_backups_cnt_to_compare)"
+   diff <(echo "$data" | sort -k1) <(echo "$data" | sort -k2) >/dev/null
+   if [ $? -eq 0 ]; then
+      ok "Backups are fine. Size of last $last_backups_cnt_to_compare backups backup is growing" 1
+   else
+      error "Size of last $last_backups_cnt_to_compare backups backup is _NOT_ growing" 1
+      return 1
+   fi
+
+   return 0
+}
+
+
+# -------------------------------------------------------------------------
+function provide_backup_report(){
+   if [ ! -z "$S3_URL" ]; then
+      report_s3_backups
+   else
+      error "Unknown backup type" 1
+      return 1
+   fi
+}
+
+
+# -------------------------------------------------------------------------
+function ident(){
+   printf '%*s' $(($1*3)) ""
+}
+
 
 
 # -------------------------------------------------------------------------
 function info(){
-   echo "$1"
+   if [ $silent -eq 0 ]; then
+      local identation=$2
+      [ -z "$identation" ] && identation=0
+      echo -e "$(ident $identation)$1"
+   fi
+}
+
+
+# -------------------------------------------------------------------------
+function ok(){
+   local identation=$2
+   [ -z "$2" ] && identation=0
+   echo -e "${C_GREEN}$(ident $identation)$1${C_NC}"
+}
+
+# -------------------------------------------------------------------------
+function debug(){
+   local identation=$2
+   [ -z "$2" ] && identation=0
+   echo -e "${C_PURPLE}$(ident $identation)$1${C_NC}"
+}
+
+
+# -------------------------------------------------------------------------
+function warning(){
+   local identation=$2
+   [ -z "$2" ] && identation=0
+   echo -e "${C_YELLOW}$(ident $identation)$1${C_NC}"
 }
 
 
 # -------------------------------------------------------------------------
 function error() {
-   last_error="$1"
-   echo "$1" >&2
+   local identation=$2
+   [ -z "$2" ] && identation=0
+   >&2 echo -e "${C_RED}$(ident $identation)$1${C_NC}"
+}
+
+
+# ------------------------------------------------------------------------------------------------------------
+function usage() {
+  cat << __USAGE__ >&2
+Usage: ${0} 
+Options:
+   
+   --backup|-b)    create backup
+   --report|-r)    provide report
+
+   --help|-h)   usage
+__USAGE__
+} 
+
+
+
+# ------------------------------------------------------------------------------------------------------------
+function get_options(){
+   local OPTIONS=$@
+   local ARGUMENTS=($OPTIONS)
+   local index=0
+
+   for ARG in $OPTIONS; do
+       index=$(($index+1));
+       case $ARG in
+         --backup|-b)    backup_mode=x;;
+         --report|-r)    report_mode=x;;
+
+         --help|-h) usage; exit 0;;
+      esac
+   done
+
+   [ ! -z "$report_mode" ] && silent=$C_MAKE_ME_SILENT
 }
 
 
@@ -55,6 +189,7 @@ function error() {
 # -------------------------------------------------------------------------
 function cleanup(){
    info "cleaning up..."
+   # TODO
    # rm -rf $backup_root_folder/* 
 }
 
@@ -66,6 +201,7 @@ function on_exit(){
 
    if [ $rc -ne 0 ]; then
       echo "Got error message. Going to send slack notification..."
+      # TODO
       # slack odoo "$SERVER_NAME failed during backup with exit code $rc. Check log file (if any). Last message was: $last_error"
    fi
 }
@@ -74,13 +210,13 @@ function on_exit(){
 
 # -------------------------------------------------------------------------
 function init(){
-   info "init script..."
+   info "Calling init script..."
    if [ -e server.conf ]; then
-      echo "Reading default config server.conf"
+      info "Reading default config server.conf"
       source server.conf
    fi
    if [ -e ~/.bkodoorc ]; then
-      echo "Reading user config ~/.bkodoorc"
+      info "Reading user config ~/.bkodoorc"
       source ~/.bkodoorc
    fi
 
@@ -101,13 +237,13 @@ function init(){
       rc=3
    fi
 
-   s3_link=${S3_URL/:\//\/object}
-   if [ -z "$S3_URL" ] || [ -z "$s3_link" ]; then
-      error "S3_URL is empty or it is not posssible to extract object..."
-      rc=4
+
+   if [ -z "$backup_mode" ] && [ -z "$report_mode" ]; then
+      error "You should pass either --backup or --report"
+      rc=5
    fi
 
-   if [ $rc -eq 0 ]; then
+   if [ $rc -eq 0 ] && [ ! -z "$backup_mode" ]; then
       now=$(date +"%Y_%d_%m_%H%M")
       backup_folder="backup_${SERVER_NAME}_$now"
       mkdir -p "$backup_root_folder/$backup_folder"
@@ -121,7 +257,7 @@ function init(){
 
 # -------------------------------------------------------------------------
 function check_dependencies() {
-   info "checking dependencies..."
+   info "Checking check_dependencies"
    local rc=0
    p7zip_cmd=$(which 7z)
    if [ -z "$p7zip_cmd" ]; then
@@ -175,7 +311,7 @@ function do_backup(){
    local last_backup_size=$(echo $last_backup | awk '{print $3}')
 
 
-   echo "last=$last_backup_size, current=$current_backup_size"
+   echo "last backup size: $last_backup_size, current backup size: $current_backup_size"
 
    # current backup size should not be less then 95% of the last one
    if [ ! -z "$last_backup_size" ] && [ $current_backup_size -gt $(echo "scale=0; $last_backup_size*95/100" | $bc_cmd) ]; then
@@ -189,12 +325,6 @@ function do_backup(){
 }
 
 
-
-
-# -------------------------------------------------------------------------
-function check_backups(){
-   info "checking backups..."
-}
 
 
 # -------------------------------------------------------------------------
@@ -212,23 +342,17 @@ function slack(){
 trap on_exit EXIT SIGINT SIGTERM SIGQUIT
 
 
+get_options $@
+
 check_dependencies || exit $?
 init || exit $?
 
 
-do_backup || exit $?
+if [ ! -z "$backup_mode" ]; then
+   do_backup || exit $?
+fi
 
-check_backups
 
-# This script needs improvements but basically takes the AWS credentials on the user folder and uses 7zip to create a file with the Postgres dump plus the Odoo filestore
-
-# Sometimes credentials point to a bucket that is ours other times credentials belong to customer. When we start the project we backup with our own credentials to make sure the project is safe until we deliver to customer.
-
-# We need a routine that can be called from the command line, that will loop through all active projects in inventory and will check for the existence of a backup script on all production instances and will gather information regarding all backups:
-
-# date of the last backup
-# size of the last backup
-# date of the older backup
-# are the backups growing?
-
-# This information will be posted into a slack channel
+if [ ! -z "$report_mode" ]; then
+   provide_backup_report || exit $?
+fi
